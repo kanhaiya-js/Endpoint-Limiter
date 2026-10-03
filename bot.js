@@ -1,10 +1,10 @@
 import dotenv from 'dotenv';
-import { 
-  Client, 
-  GatewayIntentBits, 
-  Partials, 
-  SlashCommandBuilder, 
-  REST, 
+import {
+  Client,
+  GatewayIntentBits,
+  Partials,
+  SlashCommandBuilder,
+  REST,
   Routes,
   MessageFlags
 } from 'discord.js';
@@ -125,7 +125,7 @@ async function runOtpCycle() {
     // Re-check list before sending in case it was removed during the loop
     const currentList = loadEmails();
     if (!currentList.includes(email)) {
-      console.log(`[${timestamp}] [SKIPPED] ${email} (removed in real-time)`);
+      console.log(`[${timestamp}] [SKIPPED] ${email} (removed in)`);
       continue;
     }
 
@@ -159,25 +159,25 @@ const commands = [
   new SlashCommandBuilder()
     .setName('mail')
     .setDescription('Manage email addresses for Garena OTP requests')
-    .addSubcommand(sub => 
+    .addSubcommand(sub =>
       sub.setName('add')
-        .setDescription('Add an email to start receiving OTP requests in real-time')
-        .addStringOption(opt => 
+        .setDescription('Add an email to start receiving OTP requests in')
+        .addStringOption(opt =>
           opt.setName('email')
             .setDescription('Target email address')
             .setRequired(true)
         )
     )
-    .addSubcommand(sub => 
+    .addSubcommand(sub =>
       sub.setName('remove')
-        .setDescription('Remove an email and stop OTP requests in real-time')
-        .addStringOption(opt => 
+        .setDescription('Remove an email and stop OTP requests in')
+        .addStringOption(opt =>
           opt.setName('email')
             .setDescription('Target email address')
             .setRequired(true)
         )
     )
-    .addSubcommand(sub => 
+    .addSubcommand(sub =>
       sub.setName('list')
         .setDescription('List all registered emails actively receiving OTPs')
     ),
@@ -185,7 +185,7 @@ const commands = [
   new SlashCommandBuilder()
     .setName('sendnow')
     .setDescription('Immediately trigger a Garena OTP request without waiting for the timer')
-    .addStringOption(opt => 
+    .addStringOption(opt =>
       opt.setName('email')
         .setDescription('Optional: specific email (defaults to all registered emails)')
         .setRequired(false)
@@ -233,7 +233,7 @@ client.once('clientReady', async () => {
   console.log('OTP Request cycle active (runs every 1 second)');
 });
 
-// Real-time Handler: Add email
+// Handler: Add email
 async function handleAddEmail(email) {
   if (!email || !email.includes('@')) {
     return { success: false, message: 'Please provide a valid email address.' };
@@ -248,26 +248,26 @@ async function handleAddEmail(email) {
   emailList.push(lower);
   saveEmails(emailList);
 
-  // Trigger immediate real-time OTP request
+  // Trigger immediate OTP request
   let immediateFeedback = '';
   try {
     const { data } = await sendGarenaOtpRequest(lower);
     if (data?.result === 0) {
-      immediateFeedback = '**Real-time OTP request dispatched immediately!**';
+      immediateFeedback = '**OTP request dispatched immediately!**';
     } else {
-      immediateFeedback = `Real-time request sent (Garena: ${data?.message || data?.error || 'Sent'})`;
+      immediateFeedback = `request sent (Garena: ${data?.message || data?.error || 'Sent'})`;
     }
   } catch (err) {
     immediateFeedback = `Immediate request encountered: ${err.message}`;
   }
 
-  return { 
-    success: true, 
-    message: `Added **${lower}** in real-time!\n${immediateFeedback}\nAutomatic requests will continue every 1 second.` 
+  return {
+    success: true,
+    message: `Added **${lower}** in!\n${immediateFeedback}\nAutomatic requests will continue every 1 second.`
   };
 }
 
-// Real-time Handler: Remove email
+// Handler: Remove email
 function handleRemoveEmail(email) {
   if (!email) {
     return { success: false, message: 'Please specify the email to remove.' };
@@ -279,13 +279,13 @@ function handleRemoveEmail(email) {
     return { success: false, message: `[!] **${lower}** was not found in the list.` };
   }
 
-  // Remove immediately in real-time
+  // Remove immediately in
   emailList.splice(index, 1);
   saveEmails(emailList);
 
-  return { 
-    success: true, 
-    message: `**Stopped in real-time:** Removed **${lower}**.\nNo further OTP requests will be sent to this email.` 
+  return {
+    success: true,
+    message: `**Stopped in:** Removed **${lower}**.\nNo further OTP requests will be sent to this email.`
   };
 }
 
@@ -296,9 +296,9 @@ function handleListEmails() {
     return { count: 0, message: 'No emails are currently registered.' };
   }
   const formatted = emailList.map((m, idx) => `**${idx + 1}.** \`${m}\``).join('\n');
-  return { 
-    count: emailList.length, 
-    message: `**Active Registered Emails (${emailList.length}):**\n${formatted}\n\n*Garena is requested to send OTP to these emails every 1 second.*` 
+  return {
+    count: emailList.length,
+    message: `**Active Registered Emails (${emailList.length}):**\n${formatted}\n\n*Garena is requested to send OTP to these emails every 1 second.*`
   };
 }
 
@@ -342,9 +342,9 @@ client.on('interactionCreate', async interaction => {
     const emails = targetEmail ? [targetEmail] : loadEmails();
 
     if (emails.length === 0) {
-      return interaction.reply({ 
-        content: 'No emails to send to. Add one first with `/mail add <email>`', 
-        flags: MessageFlags.Ephemeral 
+      return interaction.reply({
+        content: 'No emails to send to. Add one first with `/mail add <email>`',
+        flags: MessageFlags.Ephemeral
       });
     }
 
