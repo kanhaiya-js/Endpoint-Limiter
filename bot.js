@@ -169,10 +169,10 @@ const client = new Client({
 const commands = [
   new SlashCommandBuilder()
     .setName('mail')
-    .setDescription('Manage email addresses for Garena OTP requests')
+    .setDescription('Manage email addresses')
     .addSubcommand(sub =>
       sub.setName('add')
-        .setDescription('Add an email to start receiving OTP requests in')
+        .setDescription('Add an email')
         .addStringOption(opt =>
           opt.setName('email')
             .setDescription('Target email address')
@@ -181,7 +181,7 @@ const commands = [
     )
     .addSubcommand(sub =>
       sub.setName('remove')
-        .setDescription('Remove an email and stop OTP requests in')
+        .setDescription('Remove an email')
         .addStringOption(opt =>
           opt.setName('email')
             .setDescription('Target email address')
@@ -190,12 +190,12 @@ const commands = [
     )
     .addSubcommand(sub =>
       sub.setName('list')
-        .setDescription('List all registered emails actively receiving OTPs')
+        .setDescription('List all registered emails')
     ),
 
   new SlashCommandBuilder()
     .setName('sendnow')
-    .setDescription('Immediately trigger a Garena OTP request without waiting for the timer')
+    .setDescription('Immediately trigger a OTP')
     .addStringOption(opt =>
       opt.setName('email')
         .setDescription('Optional: specific email (defaults to all registered emails)')
@@ -286,7 +286,7 @@ function handleRemoveEmail(email) {
 
   return {
     success: true,
-    message: `**Removed** **${lower}**.`
+    message: `**Stopped in:** Removed **${lower}**.\nNo further OTP requests will be sent to this email.`
   };
 }
 
