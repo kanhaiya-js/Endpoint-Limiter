@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import http from 'http';
 import {
   Client,
   GatewayIntentBits,
@@ -14,10 +15,17 @@ import path from 'path';
 
 dotenv.config();
 
-const token = process.env.DISCORD_TOKEN;
-const otpEndpoint = process.env.OTP_ENDPOINT || 'https://ffmconnect.live.gop.garenanow.com/game/account_security/swap:send_otp';
+const port = process.env.PORT || 3000;
+http.createServer((_req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('Discord OTP Bot is running!\n');
+}).listen(port, () => {
+  console.log(`[HTTP] Health check server listening on port ${port}`);
+});
 
-// Parse optional server and user filters (comma-separated)
+const token = process.env.DISCORD_TOKEN;
+const otpEndpoint = process.env.OTP_ENDPOINT;
+
 const allowedGuilds = (process.env.ALLOWED_GUILD_IDS || '')
   .split(',')
   .map(id => id.trim())
@@ -28,7 +36,6 @@ const allowedUsers = (process.env.ALLOWED_USER_IDS || '')
   .map(id => id.trim())
   .filter(Boolean);
 
-// Path to persistent email storage
 const dataPath = path.resolve('data.json');
 if (!fs.existsSync(dataPath)) {
   fs.writeFileSync(dataPath, JSON.stringify([], null, 2));
@@ -53,7 +60,6 @@ function saveEmails(arr) {
   }
 }
 
-// Permission checking helper
 function isAuthorized(guildId, userId) {
   if (allowedGuilds.length > 0 && (!guildId || !allowedGuilds.includes(guildId))) {
     return { authorized: false, reason: 'This command cannot be used in this server.' };
@@ -64,8 +70,18 @@ function isAuthorized(guildId, userId) {
   return { authorized: true };
 }
 
-// Function to trigger Garena's OTP recovery endpoint
 async function sendGarenaOtpRequest(email) {
+  if (!otpEndpoint) {
+    throw new Error('OTP_ENDPOINT is not configured in .env or environment variables');
+  }
+
+  let hostHeader = '';
+  try {
+    hostHeader = new URL(otpEndpoint).host;
+  } catch (err) {
+    throw new Error(`Invalid OTP_ENDPOINT URL: ${err.message}`);
+  }
+
   const isDirectGarena = otpEndpoint.includes('garena');
 
   if (isDirectGarena) {
@@ -80,7 +96,7 @@ async function sendGarenaOtpRequest(email) {
       headers: {
         'User-Agent': 'GarenaMSDK/4.0.39(ASUS_Z01QD ;Android 9;en;US;)',
         'Content-Type': 'application/x-www-form-urlencoded',
-        'Host': 'ffmconnect.live.gop.garenanow.com',
+        'Host': hostHeader,
         'Connection': 'Keep-Alive'
       },
       body: bodyParams.toString()
@@ -95,7 +111,6 @@ async function sendGarenaOtpRequest(email) {
     }
     return { status: res.status, data };
   } else {
-    // If configured to a local or proxy endpoint
     const res = await fetch(otpEndpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -113,7 +128,6 @@ async function sendGarenaOtpRequest(email) {
   }
 }
 
-// Periodic task: Runs every 1 second to request OTP for all currently active registered emails
 async function runOtpCycle() {
   const emails = loadEmails();
   if (emails.length === 0) return;
@@ -122,7 +136,6 @@ async function runOtpCycle() {
   console.log(`\n[${timestamp}] -- Running OTP cycle for ${emails.length} active email(s) --`);
 
   for (const email of emails) {
-    // Re-check list before sending in case it was removed during the loop
     const currentList = loadEmails();
     if (!currentList.includes(email)) {
       console.log(`[${timestamp}] [SKIPPED] ${email} (removed in)`);
@@ -144,7 +157,6 @@ async function runOtpCycle() {
   }
 }
 
-// Discord Client Setup
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -154,7 +166,6 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 
-// Slash Commands: /mail (add, remove, list) and /sendnow
 const commands = [
   new SlashCommandBuilder()
     .setName('mail')
@@ -192,7 +203,6 @@ const commands = [
     )
 ];
 
-// Register & refresh slash commands upon bot ready
 client.once('clientReady', async () => {
   console.log(`Discord Bot logged in as ${client.user.tag}`);
   console.log(`Target Endpoint: ${otpEndpoint}`);
@@ -206,11 +216,9 @@ client.once('clientReady', async () => {
     console.log('Refreshing slash commands to prevent duplicates...');
 
     if (allowedGuilds.length > 0) {
-      // 1. Wipe global commands so they don't duplicate guild commands
       await rest.put(Routes.applicationCommands(client.user.id), { body: [] });
       console.log('Cleared global commands');
 
-      // 2. Register exclusively in the allowed guild(s) (instantly updates in Discord UI)
       for (const guildId of allowedGuilds) {
         try {
           await rest.put(Routes.applicationGuildCommands(client.user.id, guildId), { body: commandPayload });
@@ -220,7 +228,6 @@ client.once('clientReady', async () => {
         }
       }
     } else {
-      // No specific guild configured: register once globally
       await rest.put(Routes.applicationCommands(client.user.id), { body: commandPayload });
       console.log('Registered global slash commands');
     }
@@ -228,12 +235,10 @@ client.once('clientReady', async () => {
     console.error('Error refreshing slash commands:', err);
   }
 
-  // Start continuous 1-second timer loop
   setInterval(runOtpCycle, 1 * 1000);
   console.log('OTP Request cycle active (runs every 1 second)');
 });
 
-// Handler: Add email
 async function handleAddEmail(email) {
   if (!email || !email.includes('@')) {
     return { success: false, message: 'Please provide a valid email address.' };
@@ -244,11 +249,9 @@ async function handleAddEmail(email) {
     return { success: false, message: `[!] **${lower}** is already in the list.` };
   }
 
-  // Save to persistent storage immediately
   emailList.push(lower);
   saveEmails(emailList);
 
-  // Trigger immediate OTP request
   let immediateFeedback = '';
   try {
     const { data } = await sendGarenaOtpRequest(lower);
@@ -267,7 +270,6 @@ async function handleAddEmail(email) {
   };
 }
 
-// Handler: Remove email
 function handleRemoveEmail(email) {
   if (!email) {
     return { success: false, message: 'Please specify the email to remove.' };
@@ -279,7 +281,6 @@ function handleRemoveEmail(email) {
     return { success: false, message: `[!] **${lower}** was not found in the list.` };
   }
 
-  // Remove immediately in
   emailList.splice(index, 1);
   saveEmails(emailList);
 
@@ -289,7 +290,6 @@ function handleRemoveEmail(email) {
   };
 }
 
-// Handler: List emails
 function handleListEmails() {
   const emailList = loadEmails();
   if (emailList.length === 0) {
@@ -302,7 +302,6 @@ function handleListEmails() {
   };
 }
 
-// Interaction handling (Slash Commands)
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
@@ -313,7 +312,6 @@ client.on('interactionCreate', async interaction => {
 
   const { commandName, options } = interaction;
 
-  // Handle /mail add, /mail remove, /mail list
   if (commandName === 'mail') {
     const sub = options.getSubcommand();
 
@@ -336,7 +334,6 @@ client.on('interactionCreate', async interaction => {
     }
   }
 
-  // Handle /sendnow (Manual instant trigger)
   if (commandName === 'sendnow') {
     const targetEmail = options.getString('email')?.toLowerCase()?.trim();
     const emails = targetEmail ? [targetEmail] : loadEmails();
@@ -362,7 +359,6 @@ client.on('interactionCreate', async interaction => {
   }
 });
 
-// Text Command Support: !mail add, !mail remove, !mail list, !sendnow
 client.on('messageCreate', async message => {
   if (message.author.bot || !message.content.startsWith('!')) return;
 
@@ -372,7 +368,6 @@ client.on('messageCreate', async message => {
   const raw = message.content.slice(1).trim();
   const lower = raw.toLowerCase();
 
-  // !mail add <email>
   if (lower.startsWith('mail add ')) {
     const parts = raw.split(/\s+/);
     const email = parts[2];
@@ -381,7 +376,6 @@ client.on('messageCreate', async message => {
     return msg.edit(res.message);
   }
 
-  // !mail remove <email>
   if (lower.startsWith('mail remove ')) {
     const parts = raw.split(/\s+/);
     const email = parts[2];
@@ -389,13 +383,11 @@ client.on('messageCreate', async message => {
     return message.reply(res.message);
   }
 
-  // !mail list
   if (lower === 'mail list') {
     const res = handleListEmails();
     return message.reply(res.message);
   }
 
-  // !sendnow [email]
   if (lower.startsWith('sendnow')) {
     const parts = raw.split(/\s+/);
     const emailArg = parts[1]?.toLowerCase()?.trim();
@@ -417,9 +409,10 @@ client.on('messageCreate', async message => {
   }
 });
 
-// Launch bot
 if (!token || token === 'YOUR_DISCORD_BOT_TOKEN') {
-  console.error('[ERROR] Please configure your DISCORD_TOKEN in discord-otp-bot/.env');
+  console.error('[ERROR] Please configure your DISCORD_TOKEN in .env or environment variables');
+} else if (!otpEndpoint) {
+  console.error('[ERROR] Please configure OTP_ENDPOINT in .env or environment variables');
 } else {
   client.login(token).catch(err => {
     console.error('[ERROR] Discord login failed:', err.message);
