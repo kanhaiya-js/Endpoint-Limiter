@@ -286,7 +286,7 @@ function handleRemoveEmail(email) {
 
   return {
     success: true,
-    message: `**Stopped in:** Removed **${lower}**.\nNo further OTP requests will be sent to this email.`
+    message: `**Removed** **${lower}**.`
   };
 }
 
