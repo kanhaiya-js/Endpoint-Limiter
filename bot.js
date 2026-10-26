@@ -10,21 +10,14 @@ import {
   MessageFlags
 } from 'discord.js';
 import fetch from 'node-fetch';
-import fs from 'fs';
-import path from 'path';
+import mongoose from 'mongoose';
 
 dotenv.config();
 
 const port = process.env.PORT || 3000;
-http.createServer((_req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Discord OTP Bot is running!\n');
-}).listen(port, () => {
-  console.log(`[HTTP] Health check server listening on port ${port}`);
-});
-
 const token = process.env.DISCORD_TOKEN;
 const otpEndpoint = process.env.OTP_ENDPOINT;
+const mongoUri = process.env.MONGODB_URI;
 
 const allowedGuilds = (process.env.ALLOWED_GUILD_IDS || '')
   .split(',')
@@ -36,29 +29,142 @@ const allowedUsers = (process.env.ALLOWED_USER_IDS || '')
   .map(id => id.trim())
   .filter(Boolean);
 
-const dataPath = path.resolve('data.json');
-if (!fs.existsSync(dataPath)) {
-  fs.writeFileSync(dataPath, JSON.stringify([], null, 2));
-}
+// MongoDB Email Model
+const emailSchema = new mongoose.Schema({
+  email: {
+    type: String,
+    required: true,
+    unique: true,
+    lowercase: true,
+    trim: true
+  },
+  addedAt: {
+    type: Date,
+    default: Date.now
+  }
+});
+
+const EmailModel = mongoose.model('Email', emailSchema);
+
+// In-memory cache for fast 0ms access during 1-second OTP loop
+let cachedEmails = [];
+let isDbConnected = false;
 
 function loadEmails() {
+  return [...cachedEmails];
+}
+
+async function connectToDatabase() {
   try {
-    const raw = fs.readFileSync(dataPath, 'utf-8');
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    console.log('[MongoDB] Connecting to MongoDB Atlas...');
+    await mongoose.connect(mongoUri, {
+      serverSelectionTimeoutMS: 8000
+    });
+    isDbConnected = true;
+    console.log('[MongoDB] Connected successfully to database!');
+
+    // Fetch registered emails from MongoDB
+    const docs = await EmailModel.find({}).sort({ addedAt: 1 }).lean();
+    cachedEmails = docs.map(d => d.email.toLowerCase().trim()).filter(Boolean);
+    console.log(`[MongoDB] Active registered emails loaded: ${cachedEmails.length}`);
   } catch (err) {
-    console.error('Error loading data.json:', err);
-    return [];
+    console.error('[MongoDB] Connection error:', err.message);
+    isDbConnected = false;
+    cachedEmails = [];
   }
 }
 
-function saveEmails(arr) {
-  try {
-    fs.writeFileSync(dataPath, JSON.stringify(arr, null, 2));
-  } catch (err) {
-    console.error('Error saving data.json:', err);
+
+// HTTP Server for Render Health Check, JSON API, and Web Dashboard
+http.createServer((req, res) => {
+  const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+
+  // JSON API Endpoint (/api/emails or /emails)
+  if (parsedUrl.pathname === '/api/emails' || parsedUrl.pathname === '/emails') {
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*'
+    });
+    res.end(JSON.stringify({
+      status: 'online',
+      database: isDbConnected ? 'MongoDB Connected' : 'Disconnected',
+      count: cachedEmails.length,
+      emails: cachedEmails,
+      timestamp: new Date().toISOString()
+    }, null, 2));
+    return;
   }
-}
+
+  // Dashboard homepage
+  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+  const emailItems = cachedEmails.length === 0
+    ? '<li style="color:#94a3b8;font-style:italic;padding:0.75rem 0;">No emails registered yet. Add using Discord: <code>/mail add &lt;email&gt;</code></li>'
+    : cachedEmails.map((e, idx) => `<li style="padding:0.6rem 0;border-bottom:1px solid #334155;font-family:monospace;color:#f1f5f9;"><span style="color:#38bdf8;margin-right:0.5rem;">${idx + 1}.</span>${e}</li>`).join('');
+
+  res.end(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Discord OTP Bot Dashboard</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0b0f19; color: #f8fafc; padding: 2rem 1rem; display: flex; justify-content: center; }
+    .card { background: #151d30; border-radius: 14px; padding: 2rem; max-width: 620px; width: 100%; box-shadow: 0 15px 35px rgba(0,0,0,0.6); border: 1px solid #1e293b; }
+    .header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1.5rem; }
+    h1 { font-size: 1.4rem; color: #38bdf8; display: flex; align-items: center; gap: 0.5rem; }
+    .badges { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+    .badge { padding: 0.25rem 0.65rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+    .badge-green { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); }
+    .badge-blue { background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.4); }
+    .badge-red { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); }
+    .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem; }
+    .stat { background: #0b0f19; padding: 1.2rem; border-radius: 10px; border: 1px solid #1e293b; }
+    .stat-label { font-size: 0.75rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+    .stat-val { font-size: 1.6rem; font-weight: 700; color: #f8fafc; margin-top: 0.35rem; }
+    .list-box { background: #0b0f19; border-radius: 10px; padding: 1.2rem; border: 1px solid #1e293b; }
+    .list-box h2 { font-size: 0.85rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.75rem; display: flex; justify-content: space-between; }
+    ul { list-style: none; }
+    .footer { margin-top: 1.5rem; font-size: 0.8rem; color: #64748b; text-align: center; line-height: 1.6; }
+    a { color: #38bdf8; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code { background: #1e293b; padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.8rem; color: #38bdf8; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="header">
+      <h1>⚡ OTP Limiter</h1>
+      <div class="badges">
+        <span class="badge badge-green">● Bot Online</span>
+        <span class="badge ${isDbConnected ? 'badge-blue' : 'badge-red'}">🗄️ ${isDbConnected ? 'MongoDB Connected' : 'DB Disconnected'}</span>
+      </div>
+    </div>
+    <div class="stats">
+      <div class="stat">
+        <div class="stat-label">Active Registered Emails</div>
+        <div class="stat-val">${cachedEmails.length}</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Loop Interval</div>
+        <div class="stat-val">1 sec</div>
+      </div>
+    </div>
+    <div class="list-box">
+      <h2><span>Registered Target Emails</span><span>${cachedEmails.length} active</span></h2>
+      <ul>${emailItems}</ul>
+    </div>
+    <div class="footer">
+      Raw JSON endpoint: <a href="/api/emails">/api/emails</a><br>
+      Manage emails via Discord using <code>/mail add &lt;email&gt;</code> and <code>/mail remove &lt;email&gt;</code>
+    </div>
+  </div>
+</body>
+</html>`);
+}).listen(port, () => {
+  console.log(`[HTTP] Health check & Dashboard server listening on port ${port}`);
+});
+
 
 function isAuthorized(guildId, userId) {
   if (allowedGuilds.length > 0 && (!guildId || !allowedGuilds.includes(guildId))) {
@@ -243,14 +349,28 @@ async function handleAddEmail(email) {
   if (!email || !email.includes('@')) {
     return { success: false, message: 'Please provide a valid email address.' };
   }
-  const emailList = loadEmails();
   const lower = email.toLowerCase().trim();
-  if (emailList.includes(lower)) {
+  if (cachedEmails.includes(lower)) {
     return { success: false, message: `[!] **${lower}** is already in the list.` };
   }
 
-  emailList.push(lower);
-  saveEmails(emailList);
+  // 1. Persist to MongoDB
+  if (isDbConnected) {
+    try {
+      await EmailModel.updateOne(
+        { email: lower },
+        { $setOnInsert: { email: lower, addedAt: new Date() } },
+        { upsert: true }
+      );
+    } catch (err) {
+      console.error('[MongoDB] Error saving email:', err.message);
+    }
+  }
+
+  // 2. Update in-memory cache
+  if (!cachedEmails.includes(lower)) {
+    cachedEmails.push(lower);
+  }
 
   let immediateFeedback = '';
   try {
@@ -266,27 +386,35 @@ async function handleAddEmail(email) {
 
   return {
     success: true,
-    message: `Added **${lower}** in!\n${immediateFeedback}\nAutomatic requests will continue every 1 second.`
+    message: `Added **${lower}** to MongoDB & active loop!\n${immediateFeedback}\nAutomatic requests will continue every 1 second.`
   };
 }
 
-function handleRemoveEmail(email) {
+async function handleRemoveEmail(email) {
   if (!email) {
     return { success: false, message: 'Please specify the email to remove.' };
   }
-  const emailList = loadEmails();
   const lower = email.toLowerCase().trim();
-  const index = emailList.indexOf(lower);
+  const index = cachedEmails.indexOf(lower);
   if (index === -1) {
     return { success: false, message: `[!] **${lower}** was not found in the list.` };
   }
 
-  emailList.splice(index, 1);
-  saveEmails(emailList);
+  // 1. Delete from MongoDB
+  if (isDbConnected) {
+    try {
+      await EmailModel.deleteOne({ email: lower });
+    } catch (err) {
+      console.error('[MongoDB] Error removing email:', err.message);
+    }
+  }
+
+  // 2. Update in-memory cache
+  cachedEmails.splice(index, 1);
 
   return {
     success: true,
-    message: `**Stopped in:** Removed **${lower}**.\nNo further OTP requests will be sent to this email.`
+    message: `**Stopped:** Removed **${lower}** from MongoDB.\nNo further OTP requests will be sent to this email.`
   };
 }
 
@@ -298,7 +426,7 @@ function handleListEmails() {
   const formatted = emailList.map((m, idx) => `**${idx + 1}.** \`${m}\``).join('\n');
   return {
     count: emailList.length,
-    message: `**Active Registered Emails (${emailList.length}):**\n${formatted}\n\n*Garena is requested to send OTP to these emails every 1 second.*`
+    message: `**Active Registered Emails (${emailList.length}):**\n${formatted}\n\n*Persisted in MongoDB Atlas • OTP requests running every 1 second.*`
   };
 }
 
@@ -324,8 +452,9 @@ client.on('interactionCreate', async interaction => {
 
     if (sub === 'remove') {
       const email = options.getString('email');
-      const result = handleRemoveEmail(email);
-      return interaction.reply({ content: result.message, flags: MessageFlags.Ephemeral });
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const result = await handleRemoveEmail(email);
+      return interaction.editReply({ content: result.message });
     }
 
     if (sub === 'list') {
@@ -379,8 +508,9 @@ client.on('messageCreate', async message => {
   if (lower.startsWith('mail remove ')) {
     const parts = raw.split(/\s+/);
     const email = parts[2];
-    const res = handleRemoveEmail(email);
-    return message.reply(res.message);
+    const msg = await message.reply('Removing email from database...');
+    const res = await handleRemoveEmail(email);
+    return msg.edit(res.message);
   }
 
   if (lower === 'mail list') {
@@ -409,12 +539,19 @@ client.on('messageCreate', async message => {
   }
 });
 
-if (!token || token === 'YOUR_DISCORD_BOT_TOKEN') {
-  console.error('[ERROR] Please configure your DISCORD_TOKEN in .env or environment variables');
-} else if (!otpEndpoint) {
-  console.error('[ERROR] Please configure OTP_ENDPOINT in .env or environment variables');
-} else {
-  client.login(token).catch(err => {
-    console.error('[ERROR] Discord login failed:', err.message);
-  });
+async function startBot() {
+  await connectToDatabase();
+
+  if (!token || token === 'YOUR_DISCORD_BOT_TOKEN') {
+    console.error('[ERROR] Please configure your DISCORD_TOKEN in .env or environment variables');
+  } else if (!otpEndpoint) {
+    console.error('[ERROR] Please configure OTP_ENDPOINT in .env or environment variables');
+  } else {
+    client.login(token).catch(err => {
+      console.error('[ERROR] Discord login failed:', err.message);
+    });
+  }
 }
+
+startBot();
+
